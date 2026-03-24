@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+
+# 结果文件（含抓取数据，不上传）
+result.json
+result_demo.json
+
+# 截图
+*.png
+
+# 环境
+.env
+*.env
+conda-env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
