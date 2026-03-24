@@ -32,13 +32,13 @@ playwright install chromium
 
 ```
 .
-├── quest1_1_observe.py       # 阶段1: 观察 CF 拦截现象
-├── quest1_2_stealth.py       # 阶段1: 引入 Stealth 驱动
-├── quest2_1_useragent.py     # 阶段2: 真实 UA + 视口配置
-├── quest3_1_shadowdom.py     # 阶段3: 穿透 Shadow DOM 点击 Turnstile
-├── quest3_2_random_delay.py  # 阶段3: 随机延时 + 鼠标轨迹模拟
-├── quest4_1_extract.py       # 阶段4: 通过验证后提取业务数据
-├── quest_final_demo.py       # 成果验收: 对 CF 官方 Turnstile Demo 完整测试
+├── observe_cf_block.py          # 阶段1: 用标准 Playwright 观察 CF 403 拦截
+├── stealth_hide_webdriver.py    # 阶段1: 引入 Stealth，隐藏 navigator.webdriver
+├── spoof_useragent_viewport.py  # 阶段2: 伪造真实 UA、视口、时区
+├── click_turnstile_shadowdom.py # 阶段3: 穿透 Shadow DOM 定位并点击 Turnstile
+├── human_mouse_random_delay.py  # 阶段3: 随机延时 + 人类鼠标轨迹模拟
+├── extract_protected_data.py    # 阶段4: 通过验证后提取真实业务数据
+├── final_demo_turnstile.py      # 成果验收: 对 CF 官方 Turnstile Demo 完整测试
 └── README.md
 ```
 
@@ -48,48 +48,84 @@ playwright install chromium
 
 | 脚本 | 目标 | 验收标准 |
 |------|------|----------|
-| `quest1_1_observe.py` | 用标准 Playwright 观察被拦截现象 | 页面标题含 "Just a moment..." |
-| `quest1_2_stealth.py` | 引入 playwright-stealth 隐藏自动化特征 | `navigator.webdriver = false` |
+| `observe_cf_block.py` | 标准 Playwright 观察拦截现象 | page.title() 含 "Just a moment..." |
+| `stealth_hide_webdriver.py` | 引入 playwright-stealth 隐藏自动化特征 | `navigator.webdriver = false` |
 
 ### 阶段 2：调教浏览器环境
 
 | 脚本 | 目标 | 验收标准 |
 |------|------|----------|
-| `quest2_1_useragent.py` | 配置真实 UA、视口、时区 | bot.sannysoft.com 全绿 |
+| `spoof_useragent_viewport.py` | 配置真实 UA、视口、时区 | bot.sannysoft.com UA 不含 Headless |
 
 ### 阶段 3：攻克 Turnstile
 
 | 脚本 | 目标 | 验收标准 |
 |------|------|----------|
-| `quest3_1_shadowdom.py` | 穿透 Shadow DOM 定位并点击 Turnstile | 验证框消失，出现绿色勾 |
-| `quest3_2_random_delay.py` | 随机延时 + 鼠标轨迹模拟 | 5次中≥4次通过 |
+| `click_turnstile_shadowdom.py` | 穿透 Shadow DOM 定位并点击 Turnstile | 验证框消失，出现绿色勾 |
+| `human_mouse_random_delay.py` | 随机延时 + 鼠标轨迹模拟 | 5 次中 ≥4 次通过 |
 
 ### 阶段 4：成果验收
 
 | 脚本 | 目标 | 验收标准 |
 |------|------|----------|
-| `quest4_1_extract.py` | 提取受保护页面的真实业务数据 | 生成 result.json，含真实内容 |
-| `quest_final_demo.py` | 对 CF 官方 Turnstile Demo 完整验收 | token 存在，数据保存成功 |
+| `extract_protected_data.py` | 提取受保护页面的真实业务数据 | 生成 result.json，含真实内容 |
+| `final_demo_turnstile.py` | 对 CF 官方 Turnstile Demo 完整验收 | token 存在，数据保存成功 |
 
 ## 核心技术点
 
-### 1. playwright-stealth
-隐藏浏览器自动化特征，包括：
+### 1. playwright-stealth — 隐藏自动化特征
+
+```python
+from playwright_stealth import Stealth
+
+context = await browser.new_context(...)
+await Stealth().apply_stealth_async(context)
+```
+
+`Stealth` 会自动处理：
 - `navigator.webdriver` → `false`
 - Chrome 运行时对象伪造
-- 插件、语言、平台信息标准化
+- 插件列表、语言、平台信息标准化
+- Canvas/WebGL 指纹干扰
 
-### 2. Shadow DOM 穿透
-Turnstile widget 嵌套在 iframe 内，通过 `page.frames` 遍历 + `getBoundingClientRect()` 精确定位点击坐标。
+### 2. Shadow DOM 穿透 — 定位 Turnstile
 
-### 3. 人类行为模拟
+Turnstile widget 嵌套在跨域 iframe 内，无法直接用 CSS 选择器访问。
+通过 `getBoundingClientRect()` 获取 iframe 在页面视口中的坐标，再物理点击：
+
 ```python
-# 随机区间 sleep，绝不硬编码
-await asyncio.sleep(random.uniform(0.5, 2.0))
+rect = await page.evaluate("""
+    () => {
+        for (const f of document.querySelectorAll('iframe')) {
+            if (f.src && f.src.includes('challenges.cloudflare.com')) {
+                const r = f.getBoundingClientRect();
+                return {x: r.left + r.width/2, y: r.top + r.height/2};
+            }
+        }
+        return null;
+    }
+""")
+await page.mouse.click(rect["x"], rect["y"])
+```
+
+### 3. 人类行为模拟 — 对抗行为分析
+
+```python
+import random
+
+# ✅ 正确：随机区间
+await asyncio.sleep(random.uniform(1.5, 3.0))
+
+# ❌ 错误：固定延时，会被识别为机器人
+await asyncio.sleep(5)
 
 # 随机鼠标轨迹
-for _ in range(steps):
-    await page.mouse.move(tx + random.randint(-120, 120), ty + random.randint(-80, 80))
+for _ in range(8):
+    await page.mouse.move(
+        x + random.randint(-120, 120),
+        y + random.randint(-80, 80)
+    )
+    await asyncio.sleep(random.uniform(0.05, 0.2))
 ```
 
 ## 依赖版本
